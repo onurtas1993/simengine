@@ -3,6 +3,8 @@ name = "simengine-core"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+description = "Core manifest and validation logic for SimEngine"
+repository = "https://github.com/onurtas1993/simengine"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

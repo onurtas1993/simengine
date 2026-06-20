@@ -1,0 +1,12 @@
+{
+  "framework": {
+    "fps": 2,
+    "log_level": "info"
+  },
+  "network": {
+    "mode": "in_process"
+  },
+  "simulations": [
+    
+  ]
+}

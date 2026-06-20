@@ -3,11 +3,18 @@ name = "simengine"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+description = "A plugin-based simulation engine runtime"
+repository = "https://github.com/onurtas1993/simengine"
+
+[[bin]]
+name = "simengine"
+path = "src/main.rs"
 
 [dependencies]
-simengine-core = { path = "../simengine-core" }
-simengine-plugin-api = { path = "../simengine-plugin-api" }
-simengine-network = { path = "../simengine-network" }
+simengine-core = { version = "0.1.0", path = "../simengine-core" }
+simengine-plugin-api = { version = "0.1.0", path = "../simengine-plugin-api" }
+simengine-network = { version = "0.1.0", path = "../simengine-network" }
+
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 libloading = "0.8"

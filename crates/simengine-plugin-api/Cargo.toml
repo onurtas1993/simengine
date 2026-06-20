@@ -2,8 +2,9 @@
 name = "simengine-plugin-api"
 version = "0.1.0"
 edition = "2021"
-description = "Stable C ABI plugin API for simengine simulations"
+description = "Stable C ABI plugin API for SimEngine simulations"
 license = "MIT"
+repository = "https://github.com/onurtas1993/simengine"
 
 [lib]
 crate-type = ["rlib"]
