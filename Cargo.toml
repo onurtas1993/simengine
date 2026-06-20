@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/simengine-core",
+  "crates/simengine-plugin-api",
+  "crates/simengine-network",
+  "crates/simengine",
+  "examples/basic-sim",
+  "examples/basic-sim2"
+]

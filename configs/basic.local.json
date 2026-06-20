@@ -1,0 +1,45 @@
+{
+  "framework": {
+    "fps": 2,
+    "log_level": "info",
+    "max_frames": 10
+  },
+  "network": {
+    "mode": "in_process"
+  },
+  "simulations": [
+    {
+      "name": "basic-sim",
+      "plugin": "../target/debug/basic_sim.dll",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "counter",
+          "type": "int32"
+        }
+      ],
+      "params": {
+        "start": 0
+      }
+    },
+    {
+      "name": "basic-sim2",
+      "plugin": "../target/debug/basic_sim2.dll",
+      "inputs": [
+        {
+          "name": "counter",
+          "source": "basic-sim.counter",
+          "type": "int32",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "double_counter",
+          "type": "int32"
+        }
+      ],
+      "params": {}
+    }
+  ]
+}

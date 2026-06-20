@@ -1,0 +1,9 @@
+[package]
+name = "simengine-plugin-api"
+version = "0.1.0"
+edition = "2021"
+description = "Stable C ABI plugin API for simengine simulations"
+license = "MIT"
+
+[lib]
+crate-type = ["rlib"]
