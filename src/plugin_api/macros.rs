@@ -39,7 +39,7 @@ macro_rules! simengine_plugin {
             }
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub unsafe extern "C" fn simengine_get_api() -> $crate::SimApi {
             $crate::SimApi {
                 api_version: $crate::SIMENGINE_API_VERSION,

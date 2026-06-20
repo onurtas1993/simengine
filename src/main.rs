@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use libloading::{Library, Symbol};
 use simengine::core::{load_manifest, validate_manifest, Manifest, SimulationConfig};
-use simengine::{GetSimApiFn, SimApi, SimContext, SimLogLevel, SIMENGINE_API_VERSION};
+use simengine::plugin_api::{GetSimApiFn, SimApi, SimContext, SimLogLevel, SIMENGINE_API_VERSION};
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void, CStr, CString},

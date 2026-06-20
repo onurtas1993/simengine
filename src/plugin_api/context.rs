@@ -1,4 +1,4 @@
-use crate::{SimContext, SimLogLevel};
+use crate::{plugin_api::SimContext, plugin_api::SimLogLevel};
 use std::ffi::CString;
 
 /// Clean API exposed to simulation authors.
