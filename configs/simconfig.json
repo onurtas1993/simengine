@@ -28,9 +28,7 @@
       "inputs": [
         {
           "name": "counter",
-          "source": "basic-sim.counter",
-          "type": "int32",
-          "required": true
+          "type": "int32"
         }
       ],
       "outputs": [

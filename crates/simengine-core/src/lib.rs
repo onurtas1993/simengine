@@ -10,18 +10,14 @@ pub enum CoreError {
     #[error("invalid manifest json: {0}")]
     InvalidManifest(#[from] serde_json::Error),
 
-    #[error("input '{input}' required by simulation '{consumer}' has no source")]
-    MissingInputSource { consumer: String, input: String },
+    #[error("input '{input}' required by simulation '{consumer}' has no matching output")]
+    MissingInputProducer { consumer: String, input: String },
 
-    #[error("input producer '{producer}' required by simulation '{consumer}' does not exist")]
-    MissingProducer { consumer: String, producer: String },
-
-    #[error("type mismatch for input '{input}' of simulation '{consumer}': producer has {producer_type}, consumer expects {consumer_type}")]
-    TypeMismatch {
+    #[error("input '{input}' required by simulation '{consumer}' is ambiguous; matching outputs: {matches:?}")]
+    AmbiguousInputProducer {
         consumer: String,
         input: String,
-        producer_type: String,
-        consumer_type: String,
+        matches: Vec<String>,
     },
 
     #[error("duplicate output variable '{output}' on simulation '{simulation}'")]
@@ -90,14 +86,8 @@ pub struct SimulationConfig {
 pub struct InputConfig {
     pub name: String,
 
-    /// Fully qualified source variable, for example: "basic-sim.counter".
-    pub source: Option<String>,
-
     #[serde(rename = "type")]
     pub ty: PrimitiveType,
-
-    #[serde(default)]
-    pub required: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -144,37 +134,27 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
 
     for sim in &manifest.simulations {
         for input in &sim.inputs {
-            let Some(producer) = &input.source else {
-                if input.required {
-                    return Err(CoreError::MissingInputSource {
+            let matches: Vec<String> = outputs
+                .iter()
+                .filter(|(_, output)| output.name == input.name && output.ty == input.ty)
+                .map(|(key, _)| key.clone())
+                .collect();
+
+            match matches.len() {
+                0 => {
+                    return Err(CoreError::MissingInputProducer {
                         consumer: sim.name.clone(),
                         input: input.name.clone(),
                     });
                 }
-
-                continue;
-            };
-
-            match outputs.get(producer) {
-                Some(output) if output.ty == input.ty => {}
-
-                Some(output) => {
-                    return Err(CoreError::TypeMismatch {
+                1 => {}
+                _ => {
+                    return Err(CoreError::AmbiguousInputProducer {
                         consumer: sim.name.clone(),
                         input: input.name.clone(),
-                        producer_type: format!("{:?}", output.ty),
-                        consumer_type: format!("{:?}", input.ty),
+                        matches,
                     });
                 }
-
-                None if input.required => {
-                    return Err(CoreError::MissingProducer {
-                        consumer: sim.name.clone(),
-                        producer: producer.clone(),
-                    });
-                }
-
-                None => {}
             }
         }
     }

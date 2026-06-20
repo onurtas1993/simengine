@@ -221,15 +221,34 @@ fn run(path: PathBuf) -> Result<()> {
 }
 
 fn make_host_context(
-    _manifest: &Manifest,
+    manifest: &Manifest,
     sim: &SimulationConfig,
     shared: *mut HostShared,
 ) -> HostContext {
-    let input_sources = sim
-        .inputs
-        .iter()
-        .filter_map(|input| input.source.as_ref().map(|source| (input.name.clone(), source.clone())))
-        .collect();
+    let mut input_sources = HashMap::new();
+
+    for input in &sim.inputs {
+        let matches: Vec<String> = manifest
+            .simulations
+            .iter()
+            .flat_map(|producer_sim| {
+                producer_sim
+                    .outputs
+                    .iter()
+                    .map(move |output| (producer_sim, output))
+            })
+            .filter(|(_, output)| output.name == input.name && output.ty == input.ty)
+            .map(|(producer_sim, output)| format!("{}.{}", producer_sim.name, output.name))
+            .collect();
+
+        // validate_manifest guarantees exactly one match for every declared input.
+        let source = matches
+            .first()
+            .expect("validated input should have exactly one matching output")
+            .clone();
+
+        input_sources.insert(input.name.clone(), source);
+    }
 
     HostContext {
         sim_name: sim.name.clone(),
