@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use libloading::{Library, Symbol};
-use simengine_core::{load_manifest, validate_manifest, Manifest, SimulationConfig};
-use simengine_plugin_api::{GetSimApiFn, SimApi, SimContext, SimLogLevel};
+use simengine::core::{load_manifest, validate_manifest, Manifest, SimulationConfig};
+use simengine::{GetSimApiFn, SimApi, SimContext, SimLogLevel, SIMENGINE_API_VERSION};
 use std::{
     collections::HashMap,
     ffi::{c_char, c_void, CStr, CString},
@@ -147,12 +147,12 @@ fn run(path: PathBuf) -> Result<()> {
             get_api()
         };
 
-        if api.api_version != simengine_plugin_api::SIMENGINE_API_VERSION {
+        if api.api_version != SIMENGINE_API_VERSION {
             anyhow::bail!(
                 "plugin '{}' uses API version {}, but simengine expects {}",
                 sim.name,
                 api.api_version,
-                simengine_plugin_api::SIMENGINE_API_VERSION
+                SIMENGINE_API_VERSION
             );
         }
 
@@ -174,16 +174,29 @@ fn run(path: PathBuf) -> Result<()> {
     let fps = manifest.framework.fps.max(1);
     let dt = 1.0 / fps as f64;
     let frame_duration = Duration::from_secs_f64(dt);
-    let max_frames = manifest.framework.max_frames.unwrap_or(300);
+    let max_frames = manifest.framework.max_frames;
 
-    println!(
-        "[runner] starting run: fps={} dt={:.6}s max_frames={}",
-        fps, dt, max_frames
-    );
+    match max_frames {
+        Some(max_frames) => println!(
+            "[runner] starting run: fps={} dt={:.6}s max_frames={}",
+            fps, dt, max_frames
+        ),
+        None => println!(
+            "[runner] starting run: fps={} dt={:.6}s max_frames=unbounded",
+            fps, dt
+        ),
+    }
 
     let run_started = Instant::now();
+    let mut frame: u64 = 0;
 
-    for frame in 0..max_frames {
+    loop {
+        if let Some(max_frames) = max_frames {
+            if frame >= max_frames {
+                break;
+            }
+        }
+
         let frame_started = Instant::now();
         println!("[runner] frame {frame} begin");
 
@@ -201,13 +214,15 @@ fn run(path: PathBuf) -> Result<()> {
         println!(
             "[runner] frame {frame} end actual_dt={actual_frame_time:.6}s actual_fps={actual_fps:.2}"
         );
+
+        frame += 1;
     }
 
     let total = run_started.elapsed().as_secs_f64();
     println!(
         "[runner] finished: frames={} total_time={total:.3}s average_fps={:.2}",
-        max_frames,
-        max_frames as f64 / total.max(f64::EPSILON)
+        frame,
+        frame as f64 / total.max(f64::EPSILON)
     );
 
     for sim in &mut sims {

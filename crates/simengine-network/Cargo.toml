@@ -1,9 +1,0 @@
-[package]
-name = "simengine-network"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
-description = "Network abstraction layer for SimEngine"
-repository = "https://github.com/onurtas1993/simengine"
-
-[dependencies]

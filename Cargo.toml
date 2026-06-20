@@ -1,8 +1,23 @@
-[workspace]
-resolver = "2"
-members = [
-  "crates/simengine",
-  "crates/simengine-core",
-  "crates/simengine-plugin-api",
-  "crates/simengine-network"
-]
+[package]
+name = "simengine"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "A plugin-based simulation engine runtime and plugin API"
+repository = "https://github.com/onurtas1993/simengine"
+
+[lib]
+name = "simengine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "simengine"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+libloading = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
