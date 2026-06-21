@@ -16,6 +16,9 @@ pub enum CoreError {
     #[error("duplicate output variable '{output}' on endpoint '{endpoint}'")]
     DuplicateOutput { endpoint: String, output: String },
 
+    #[error("duplicate input variable '{input}' on endpoint '{endpoint}'")]
+    DuplicateInput { endpoint: String, input: String },
+
     #[error("input '{input}' on endpoint '{endpoint}' has no link")]
     MissingInputLink { endpoint: String, input: String },
 
@@ -28,7 +31,9 @@ pub enum CoreError {
     #[error("link target input '{input}' does not exist on endpoint '{endpoint}'")]
     MissingLinkInput { endpoint: String, input: String },
 
-    #[error("link type mismatch: {from_endpoint}/{output} is {output_type:?}, but {to_endpoint}/{input} is {input_type:?}")]
+    #[error(
+        "link type mismatch: {from_endpoint}/{output} is {output_type:?}, but {to_endpoint}/{input} is {input_type:?}"
+    )]
     LinkTypeMismatch {
         from_endpoint: String,
         output: String,
@@ -154,7 +159,14 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
             outputs.insert((sim.endpoint.clone(), output.name.clone()), output);
         }
 
+        let mut local_inputs: HashMap<&str, ()> = HashMap::new();
         for input in &sim.inputs {
+            if local_inputs.insert(input.name.as_str(), ()).is_some() {
+                return Err(CoreError::DuplicateInput {
+                    endpoint: sim.endpoint.clone(),
+                    input: input.name.clone(),
+                });
+            }
             inputs.insert((sim.endpoint.clone(), input.name.clone()), input);
         }
     }
@@ -218,4 +230,82 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest_with_sim(sim: SimulationConfig) -> Manifest {
+        Manifest {
+            framework: FrameworkConfig {
+                fps: 1,
+                log_level: "info".to_string(),
+                max_frames: Some(1),
+            },
+            simulations: vec![sim],
+            links: Vec::new(),
+        }
+    }
+
+    fn simulation(inputs: Vec<InputConfig>, outputs: Vec<OutputConfig>) -> SimulationConfig {
+        SimulationConfig {
+            name: "sim".to_string(),
+            endpoint: "127.0.0.1:7001".to_string(),
+            plugin: "sim.dll".to_string(),
+            inputs,
+            outputs,
+            params: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_inputs_on_same_endpoint() {
+        let manifest = manifest_with_sim(simulation(
+            vec![
+                InputConfig {
+                    name: "value".to_string(),
+                    ty: PrimitiveType::Int32,
+                },
+                InputConfig {
+                    name: "value".to_string(),
+                    ty: PrimitiveType::Int32,
+                },
+            ],
+            Vec::new(),
+        ));
+
+        let err = validate_manifest(&manifest).expect_err("duplicate input should fail");
+
+        assert!(matches!(
+            err,
+            CoreError::DuplicateInput { endpoint, input }
+                if endpoint == "127.0.0.1:7001" && input == "value"
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_outputs_on_same_endpoint() {
+        let manifest = manifest_with_sim(simulation(
+            Vec::new(),
+            vec![
+                OutputConfig {
+                    name: "value".to_string(),
+                    ty: PrimitiveType::Int32,
+                },
+                OutputConfig {
+                    name: "value".to_string(),
+                    ty: PrimitiveType::Int32,
+                },
+            ],
+        ));
+
+        let err = validate_manifest(&manifest).expect_err("duplicate output should fail");
+
+        assert!(matches!(
+            err,
+            CoreError::DuplicateOutput { endpoint, output }
+                if endpoint == "127.0.0.1:7001" && output == "value"
+        ));
+    }
 }

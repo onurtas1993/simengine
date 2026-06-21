@@ -17,11 +17,7 @@ pub enum SimLogLevel {
 pub struct SimContext {
     pub user_data: *mut c_void,
 
-    pub log: extern "C" fn(
-        user_data: *mut c_void,
-        level: SimLogLevel,
-        message: *const c_char,
-    ),
+    pub log: extern "C" fn(user_data: *mut c_void, level: SimLogLevel, message: *const c_char),
 
     pub set_output: extern "C" fn(
         user_data: *mut c_void,

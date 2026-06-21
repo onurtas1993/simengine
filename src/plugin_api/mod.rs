@@ -8,7 +8,7 @@ mod abi;
 mod context;
 mod macros;
 
-pub use abi::{GetSimApiFn, SimApi, SimContext, SimLogLevel, SIMENGINE_API_VERSION};
+pub use abi::{GetSimApiFn, SIMENGINE_API_VERSION, SimApi, SimContext, SimLogLevel};
 pub use context::SimulationContext;
 
 /// Trait implemented by simulation plugins.

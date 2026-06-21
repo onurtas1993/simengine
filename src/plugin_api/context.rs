@@ -44,7 +44,11 @@ impl SimulationContext {
             out.len(),
         );
 
-        if bytes_read == 0 { None } else { Some(bytes_read) }
+        if bytes_read == 0 {
+            None
+        } else {
+            Some(bytes_read)
+        }
     }
 
     pub fn get_input_i32(&self, name: impl AsRef<str>) -> Option<i32> {
