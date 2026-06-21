@@ -1,18 +1,13 @@
 //! SimEngine framework library.
 //!
-//! This single crate contains the runtime-facing core model, network layer,
+//! This single crate contains the runtime-facing core model, TCP network layer,
 //! and plugin API/ABI. The package also ships the `simengine` CLI binary.
 
 pub mod core;
+pub mod network;
 pub mod plugin_api;
-mod network;
 
 pub use plugin_api::{
-    GetSimApiFn,
-    SimApi,
-    SimContext,
-    SimLogLevel,
-    Simulation,
-    SimulationContext,
+    GetSimApiFn, SimApi, SimContext, SimLogLevel, Simulation, SimulationContext,
     SIMENGINE_API_VERSION,
 };

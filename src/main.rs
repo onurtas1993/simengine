@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use libloading::{Library, Symbol};
-use simengine::core::{load_manifest, validate_manifest, Manifest, SimulationConfig};
+use simengine::core::{load_manifest, validate_manifest, LinkConfig, Manifest, SimulationConfig};
+use simengine::network::{self, NetworkMessage};
 use simengine::plugin_api::{GetSimApiFn, SimApi, SimContext, SimLogLevel, SIMENGINE_API_VERSION};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::{c_char, c_void, CStr, CString},
     path::PathBuf,
     ptr,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -35,15 +37,17 @@ struct LoadedSim {
 
 #[derive(Default)]
 struct HostShared {
-    /// Fully qualified variable name -> latest serialized value.
-    /// Example key: "basic-sim.counter".
+    /// Endpoint/input-or-output-name -> latest serialized value.
+    /// Example key: "127.0.0.1:7002/cpu_usage".
     values: HashMap<String, Vec<u8>>,
 }
 
 struct HostContext {
     sim_name: String,
-    input_sources: HashMap<String, String>,
-    shared: *mut HostShared,
+    endpoint: String,
+    links: Vec<LinkConfig>,
+    local_endpoints: HashSet<String>,
+    shared: Arc<Mutex<HostShared>>,
 }
 
 extern "C" fn host_log(user_data: *mut c_void, level: SimLogLevel, message: *const c_char) {
@@ -62,13 +66,40 @@ extern "C" fn host_set_output(
 ) {
     let Some(ctx) = host_context(user_data) else { return; };
 
-    let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
-    let key = format!("{}.{}", ctx.sim_name, name);
-    let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) };
-    let shared = unsafe { &mut *ctx.shared };
+    let output = unsafe { CStr::from_ptr(name) }.to_string_lossy().into_owned();
+    let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+    let output_key = value_key(&ctx.endpoint, &output);
 
-    shared.values.insert(key.clone(), payload.to_vec());
-    println!("[runner] set_output {key} = {} bytes", payload.len());
+    if let Ok(mut shared) = ctx.shared.lock() {
+        shared.values.insert(output_key.clone(), payload.clone());
+    }
+
+    println!("[runner] set_output {output_key} = {} bytes", payload.len());
+
+    for link in ctx
+        .links
+        .iter()
+        .filter(|link| link.from.endpoint == ctx.endpoint && link.from.output == output)
+    {
+        let target_key = value_key(&link.to.endpoint, &link.to.input);
+
+        if ctx.local_endpoints.contains(&link.to.endpoint) {
+            if let Ok(mut shared) = ctx.shared.lock() {
+                shared.values.insert(target_key.clone(), payload.clone());
+            }
+            println!("[runner] local delivery {output_key} -> {target_key}");
+        } else {
+            let message = NetworkMessage {
+                input: link.to.input.clone(),
+                payload: payload.clone(),
+            };
+
+            match network::send(&link.to.endpoint, &message) {
+                Ok(()) => println!("[network] sent {output_key} -> {target_key}"),
+                Err(err) => eprintln!("[network] failed to send {output_key} -> {target_key}: {err}"),
+            }
+        }
+    }
 }
 
 extern "C" fn host_get_input(
@@ -79,15 +110,12 @@ extern "C" fn host_get_input(
 ) -> usize {
     let Some(ctx) = host_context(user_data) else { return 0; };
 
-    let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
-    let Some(source_key) = ctx.input_sources.get(name.as_ref()) else {
-        println!("[runner] get_input {}.{} -> no source configured", ctx.sim_name, name);
-        return 0;
-    };
+    let input = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+    let input_key = value_key(&ctx.endpoint, input.as_ref());
 
-    let shared = unsafe { &mut *ctx.shared };
-    let Some(value) = shared.values.get(source_key) else {
-        println!("[runner] get_input {}.{} <- {source_key} -> no value yet", ctx.sim_name, name);
+    let Ok(shared) = ctx.shared.lock() else { return 0; };
+    let Some(value) = shared.values.get(&input_key) else {
+        println!("[runner] get_input {input_key} -> no value yet");
         return 0;
     };
 
@@ -96,12 +124,7 @@ extern "C" fn host_get_input(
         ptr::copy_nonoverlapping(value.as_ptr(), out_payload, bytes_to_copy);
     }
 
-    println!(
-        "[runner] get_input {}.{} <- {source_key} = {bytes_to_copy} bytes",
-        ctx.sim_name,
-        name
-    );
-
+    println!("[runner] get_input {input_key} = {bytes_to_copy} bytes");
     bytes_to_copy
 }
 
@@ -133,8 +156,14 @@ fn run(path: PathBuf) -> Result<()> {
     validate_manifest(&manifest)?;
 
     let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let mut shared = Box::new(HostShared::default());
-    let shared_ptr: *mut HostShared = &mut *shared;
+    let shared = Arc::new(Mutex::new(HostShared::default()));
+    let local_endpoints: HashSet<String> = manifest
+        .simulations
+        .iter()
+        .map(|sim| sim.endpoint.clone())
+        .collect();
+
+    let _listeners = start_network_listeners(&manifest, Arc::clone(&shared))?;
     let mut sims = Vec::new();
 
     for sim in &manifest.simulations {
@@ -156,10 +185,20 @@ fn run(path: PathBuf) -> Result<()> {
             );
         }
 
-        println!("[runner] loading simulation '{}' from {}", sim.name, plugin_path.display());
+        println!(
+            "[runner] loading simulation '{}' at {} from {}",
+            sim.name,
+            sim.endpoint,
+            plugin_path.display()
+        );
 
         let config_json = CString::new(serde_json::to_string(&sim.params)?)?;
-        let mut host_ctx = Box::new(make_host_context(&manifest, sim, shared_ptr));
+        let mut host_ctx = Box::new(make_host_context(
+            &manifest,
+            sim,
+            Arc::clone(&shared),
+            local_endpoints.clone(),
+        ));
         let ctx = SimContext {
             user_data: (&mut *host_ctx) as *mut HostContext as *mut c_void,
             log: host_log,
@@ -229,45 +268,52 @@ fn run(path: PathBuf) -> Result<()> {
         (sim.api.destroy)(sim.instance);
     }
 
-    drop(sims);
-    drop(shared);
-
     Ok(())
 }
 
 fn make_host_context(
     manifest: &Manifest,
     sim: &SimulationConfig,
-    shared: *mut HostShared,
+    shared: Arc<Mutex<HostShared>>,
+    local_endpoints: HashSet<String>,
 ) -> HostContext {
-    let mut input_sources = HashMap::new();
-
-    for input in &sim.inputs {
-        let matches: Vec<String> = manifest
-            .simulations
-            .iter()
-            .flat_map(|producer_sim| {
-                producer_sim
-                    .outputs
-                    .iter()
-                    .map(move |output| (producer_sim, output))
-            })
-            .filter(|(_, output)| output.name == input.name && output.ty == input.ty)
-            .map(|(producer_sim, output)| format!("{}.{}", producer_sim.name, output.name))
-            .collect();
-
-        // validate_manifest guarantees exactly one match for every declared input.
-        let source = matches
-            .first()
-            .expect("validated input should have exactly one matching output")
-            .clone();
-
-        input_sources.insert(input.name.clone(), source);
-    }
-
     HostContext {
         sim_name: sim.name.clone(),
-        input_sources,
+        endpoint: sim.endpoint.clone(),
+        links: manifest.links.clone(),
+        local_endpoints,
         shared,
     }
+}
+
+fn start_network_listeners(
+    manifest: &Manifest,
+    shared: Arc<Mutex<HostShared>>,
+) -> Result<Vec<thread::JoinHandle<()>>> {
+    let mut handles = Vec::new();
+
+    for endpoint in manifest.simulations.iter().map(|sim| sim.endpoint.clone()) {
+        let shared = Arc::clone(&shared);
+        let listener_endpoint = endpoint.clone();
+
+        let handle = network::start_listener(endpoint.clone(), move |message| {
+            let key = value_key(&listener_endpoint, &message.input);
+            match shared.lock() {
+                Ok(mut shared) => {
+                    shared.values.insert(key.clone(), message.payload);
+                    println!("[network] received {key}");
+                }
+                Err(err) => eprintln!("[network] failed to store received value: {err}"),
+            }
+        })
+        .with_context(|| format!("failed to bind network listener on {endpoint}"))?;
+
+        handles.push(handle);
+    }
+
+    Ok(handles)
+}
+
+fn value_key(endpoint: &str, variable: &str) -> String {
+    format!("{endpoint}/{variable}")
 }

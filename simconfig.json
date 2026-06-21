@@ -1,12 +1,41 @@
 {
   "framework": {
-    "fps": 2,
-    "log_level": "info"
+    "fps": 60
   },
-  "network": {
-    "mode": "in_process"
-  },
+
   "simulations": [
-    
+    {
+      "name": "<simulation-name>",
+      "endpoint": "127.0.0.1:7001",
+      "plugin": "<plugin-file>",
+
+      "inputs": [
+        {
+          "name": "<input-name>",
+          "type": "<data-type>"
+        }
+      ],
+
+      "outputs": [
+        {
+          "name": "<output-name>",
+          "type": "<data-type>"
+        }
+      ]
+    }
+  ],
+
+  "links": [
+    {
+      "from": {
+        "endpoint": "127.0.0.1:7001",
+        "output": "<output-name>"
+      },
+
+      "to": {
+        "endpoint": "127.0.0.1:7002",
+        "input": "<input-name>"
+      }
+    }
   ]
 }

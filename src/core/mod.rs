@@ -10,18 +10,33 @@ pub enum CoreError {
     #[error("invalid manifest json: {0}")]
     InvalidManifest(#[from] serde_json::Error),
 
-    #[error("input '{input}' required by simulation '{consumer}' has no matching output")]
-    MissingInputProducer { consumer: String, input: String },
+    #[error("duplicate simulation endpoint '{endpoint}'")]
+    DuplicateEndpoint { endpoint: String },
 
-    #[error("input '{input}' required by simulation '{consumer}' is ambiguous; matching outputs: {matches:?}")]
-    AmbiguousInputProducer {
-        consumer: String,
+    #[error("duplicate output variable '{output}' on endpoint '{endpoint}'")]
+    DuplicateOutput { endpoint: String, output: String },
+
+    #[error("input '{input}' on endpoint '{endpoint}' has no link")]
+    MissingInputLink { endpoint: String, input: String },
+
+    #[error("input '{input}' on endpoint '{endpoint}' has multiple links")]
+    AmbiguousInputLink { endpoint: String, input: String },
+
+    #[error("link source output '{output}' does not exist on endpoint '{endpoint}'")]
+    MissingLinkOutput { endpoint: String, output: String },
+
+    #[error("link target input '{input}' does not exist on endpoint '{endpoint}'")]
+    MissingLinkInput { endpoint: String, input: String },
+
+    #[error("link type mismatch: {from_endpoint}/{output} is {output_type:?}, but {to_endpoint}/{input} is {input_type:?}")]
+    LinkTypeMismatch {
+        from_endpoint: String,
+        output: String,
+        output_type: PrimitiveType,
+        to_endpoint: String,
         input: String,
-        matches: Vec<String>,
+        input_type: PrimitiveType,
     },
-
-    #[error("duplicate output variable '{output}' on simulation '{simulation}'")]
-    DuplicateOutput { simulation: String, output: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -29,9 +44,10 @@ pub struct Manifest {
     pub framework: FrameworkConfig,
 
     #[serde(default)]
-    pub network: NetworkConfig,
-
     pub simulations: Vec<SimulationConfig>,
+
+    #[serde(default)]
+    pub links: Vec<LinkConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -50,26 +66,9 @@ fn default_log_level() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct NetworkConfig {
-    #[serde(default = "default_network_mode")]
-    pub mode: String,
-}
-
-impl Default for NetworkConfig {
-    fn default() -> Self {
-        Self {
-            mode: default_network_mode(),
-        }
-    }
-}
-
-fn default_network_mode() -> String {
-    "in_process".to_string()
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SimulationConfig {
     pub name: String,
+    pub endpoint: String,
     pub plugin: String,
 
     #[serde(default)]
@@ -98,6 +97,24 @@ pub struct OutputConfig {
     pub ty: PrimitiveType,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkConfig {
+    pub from: LinkFrom,
+    pub to: LinkTo,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkFrom {
+    pub endpoint: String,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LinkTo {
+    pub endpoint: String,
+    pub input: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PrimitiveType {
@@ -115,44 +132,85 @@ pub fn load_manifest(path: impl AsRef<Path>) -> Result<Manifest, CoreError> {
 }
 
 pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
-    let mut outputs: HashMap<String, &OutputConfig> = HashMap::new();
+    let mut endpoints: HashMap<&str, &SimulationConfig> = HashMap::new();
+    let mut outputs: HashMap<(String, String), &OutputConfig> = HashMap::new();
+    let mut inputs: HashMap<(String, String), &InputConfig> = HashMap::new();
 
     for sim in &manifest.simulations {
-        let mut local_outputs: HashMap<&str, ()> = HashMap::new();
+        if endpoints.insert(sim.endpoint.as_str(), sim).is_some() {
+            return Err(CoreError::DuplicateEndpoint {
+                endpoint: sim.endpoint.clone(),
+            });
+        }
 
+        let mut local_outputs: HashMap<&str, ()> = HashMap::new();
         for output in &sim.outputs {
             if local_outputs.insert(output.name.as_str(), ()).is_some() {
                 return Err(CoreError::DuplicateOutput {
-                    simulation: sim.name.clone(),
+                    endpoint: sim.endpoint.clone(),
                     output: output.name.clone(),
                 });
             }
+            outputs.insert((sim.endpoint.clone(), output.name.clone()), output);
+        }
 
-            outputs.insert(format!("{}.{}", sim.name, output.name), output);
+        for input in &sim.inputs {
+            inputs.insert((sim.endpoint.clone(), input.name.clone()), input);
+        }
+    }
+
+    for link in &manifest.links {
+        let output = outputs.get(&(link.from.endpoint.clone(), link.from.output.clone()));
+        let input = inputs.get(&(link.to.endpoint.clone(), link.to.input.clone()));
+
+        if endpoints.contains_key(link.from.endpoint.as_str()) && output.is_none() {
+            return Err(CoreError::MissingLinkOutput {
+                endpoint: link.from.endpoint.clone(),
+                output: link.from.output.clone(),
+            });
+        }
+
+        if endpoints.contains_key(link.to.endpoint.as_str()) && input.is_none() {
+            return Err(CoreError::MissingLinkInput {
+                endpoint: link.to.endpoint.clone(),
+                input: link.to.input.clone(),
+            });
+        }
+
+        if let (Some(output), Some(input)) = (output, input) {
+            if output.ty != input.ty {
+                return Err(CoreError::LinkTypeMismatch {
+                    from_endpoint: link.from.endpoint.clone(),
+                    output: link.from.output.clone(),
+                    output_type: output.ty.clone(),
+                    to_endpoint: link.to.endpoint.clone(),
+                    input: link.to.input.clone(),
+                    input_type: input.ty.clone(),
+                });
+            }
         }
     }
 
     for sim in &manifest.simulations {
         for input in &sim.inputs {
-            let matches: Vec<String> = outputs
+            let count = manifest
+                .links
                 .iter()
-                .filter(|(_, output)| output.name == input.name && output.ty == input.ty)
-                .map(|(key, _)| key.clone())
-                .collect();
+                .filter(|link| link.to.endpoint == sim.endpoint && link.to.input == input.name)
+                .count();
 
-            match matches.len() {
+            match count {
                 0 => {
-                    return Err(CoreError::MissingInputProducer {
-                        consumer: sim.name.clone(),
+                    return Err(CoreError::MissingInputLink {
+                        endpoint: sim.endpoint.clone(),
                         input: input.name.clone(),
                     });
                 }
                 1 => {}
                 _ => {
-                    return Err(CoreError::AmbiguousInputProducer {
-                        consumer: sim.name.clone(),
+                    return Err(CoreError::AmbiguousInputLink {
+                        endpoint: sim.endpoint.clone(),
                         input: input.name.clone(),
-                        matches,
                     });
                 }
             }
