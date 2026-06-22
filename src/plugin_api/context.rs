@@ -31,7 +31,7 @@ impl SimulationContext {
         );
     }
 
-    pub fn set_output_i32(&self, name: impl AsRef<str>, value: i32) {
+    pub fn set_output_f32(&self, name: impl AsRef<str>, value: f32) {
         self.set_output_bytes(name, &value.to_le_bytes());
     }
 
@@ -51,10 +51,14 @@ impl SimulationContext {
         }
     }
 
-    pub fn get_input_i32(&self, name: impl AsRef<str>) -> Option<i32> {
-        let mut buffer = [0u8; 4];
+    pub fn get_input_f32(&self, name: impl AsRef<str>) -> Option<f32> {
+        self.get_fixed_input(name).map(f32::from_le_bytes)
+    }
+
+    fn get_fixed_input<const N: usize>(&self, name: impl AsRef<str>) -> Option<[u8; N]> {
+        let mut buffer = [0u8; N];
         match self.get_input_bytes(name, &mut buffer) {
-            Some(4) => Some(i32::from_le_bytes(buffer)),
+            Some(bytes_read) if bytes_read == N => Some(buffer),
             _ => None,
         }
     }

@@ -123,12 +123,7 @@ pub struct LinkTo {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PrimitiveType {
-    Bool,
-    Int32,
-    Int64,
     Float32,
-    Float64,
-    String,
 }
 
 pub fn load_manifest(path: impl AsRef<Path>) -> Result<Manifest, CoreError> {
@@ -265,11 +260,11 @@ mod tests {
             vec![
                 InputConfig {
                     name: "value".to_string(),
-                    ty: PrimitiveType::Int32,
+                    ty: PrimitiveType::Float32,
                 },
                 InputConfig {
                     name: "value".to_string(),
-                    ty: PrimitiveType::Int32,
+                    ty: PrimitiveType::Float32,
                 },
             ],
             Vec::new(),
@@ -291,11 +286,11 @@ mod tests {
             vec![
                 OutputConfig {
                     name: "value".to_string(),
-                    ty: PrimitiveType::Int32,
+                    ty: PrimitiveType::Float32,
                 },
                 OutputConfig {
                     name: "value".to_string(),
-                    ty: PrimitiveType::Int32,
+                    ty: PrimitiveType::Float32,
                 },
             ],
         ));
