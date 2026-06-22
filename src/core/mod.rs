@@ -19,22 +19,19 @@ pub enum CoreError {
     #[error("duplicate input variable '{input}' on endpoint '{endpoint}'")]
     DuplicateInput { endpoint: String, input: String },
 
-    #[error("input '{input}' on endpoint '{endpoint}' has no link")]
-    MissingInputLink { endpoint: String, input: String },
+    #[error("route source endpoint '{endpoint}' is not declared in this config")]
+    RouteSourceNotLocal { endpoint: String },
 
-    #[error("input '{input}' on endpoint '{endpoint}' has multiple links")]
-    AmbiguousInputLink { endpoint: String, input: String },
+    #[error("route source output '{output}' does not exist on endpoint '{endpoint}'")]
+    MissingRouteOutput { endpoint: String, output: String },
 
-    #[error("link source output '{output}' does not exist on endpoint '{endpoint}'")]
-    MissingLinkOutput { endpoint: String, output: String },
-
-    #[error("link target input '{input}' does not exist on endpoint '{endpoint}'")]
-    MissingLinkInput { endpoint: String, input: String },
+    #[error("route target input '{input}' does not exist on local endpoint '{endpoint}'")]
+    MissingRouteInput { endpoint: String, input: String },
 
     #[error(
-        "link type mismatch: {from_endpoint}/{output} is {output_type:?}, but {to_endpoint}/{input} is {input_type:?}"
+        "route type mismatch: {from_endpoint}/{output} is {output_type:?}, but {to_endpoint}/{input} is {input_type:?}"
     )]
-    LinkTypeMismatch {
+    RouteTypeMismatch {
         from_endpoint: String,
         output: String,
         output_type: PrimitiveType,
@@ -52,7 +49,7 @@ pub struct Manifest {
     pub simulations: Vec<SimulationConfig>,
 
     #[serde(default)]
-    pub links: Vec<LinkConfig>,
+    pub routes: Vec<RouteConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -103,19 +100,19 @@ pub struct OutputConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LinkConfig {
-    pub from: LinkFrom,
-    pub to: LinkTo,
+pub struct RouteConfig {
+    pub from: RouteFrom,
+    pub to: RouteTo,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LinkFrom {
+pub struct RouteFrom {
     pub endpoint: String,
     pub output: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LinkTo {
+pub struct RouteTo {
     pub endpoint: String,
     pub input: String,
 }
@@ -166,60 +163,39 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
         }
     }
 
-    for link in &manifest.links {
-        let output = outputs.get(&(link.from.endpoint.clone(), link.from.output.clone()));
-        let input = inputs.get(&(link.to.endpoint.clone(), link.to.input.clone()));
-
-        if endpoints.contains_key(link.from.endpoint.as_str()) && output.is_none() {
-            return Err(CoreError::MissingLinkOutput {
-                endpoint: link.from.endpoint.clone(),
-                output: link.from.output.clone(),
+    for route in &manifest.routes {
+        if !endpoints.contains_key(route.from.endpoint.as_str()) {
+            return Err(CoreError::RouteSourceNotLocal {
+                endpoint: route.from.endpoint.clone(),
             });
         }
 
-        if endpoints.contains_key(link.to.endpoint.as_str()) && input.is_none() {
-            return Err(CoreError::MissingLinkInput {
-                endpoint: link.to.endpoint.clone(),
-                input: link.to.input.clone(),
+        let output = outputs
+            .get(&(route.from.endpoint.clone(), route.from.output.clone()))
+            .ok_or_else(|| CoreError::MissingRouteOutput {
+                endpoint: route.from.endpoint.clone(),
+                output: route.from.output.clone(),
+            })?;
+
+        let input = inputs.get(&(route.to.endpoint.clone(), route.to.input.clone()));
+
+        if endpoints.contains_key(route.to.endpoint.as_str()) && input.is_none() {
+            return Err(CoreError::MissingRouteInput {
+                endpoint: route.to.endpoint.clone(),
+                input: route.to.input.clone(),
             });
         }
 
-        if let (Some(output), Some(input)) = (output, input) {
+        if let Some(input) = input {
             if output.ty != input.ty {
-                return Err(CoreError::LinkTypeMismatch {
-                    from_endpoint: link.from.endpoint.clone(),
-                    output: link.from.output.clone(),
+                return Err(CoreError::RouteTypeMismatch {
+                    from_endpoint: route.from.endpoint.clone(),
+                    output: route.from.output.clone(),
                     output_type: output.ty.clone(),
-                    to_endpoint: link.to.endpoint.clone(),
-                    input: link.to.input.clone(),
+                    to_endpoint: route.to.endpoint.clone(),
+                    input: route.to.input.clone(),
                     input_type: input.ty.clone(),
                 });
-            }
-        }
-    }
-
-    for sim in &manifest.simulations {
-        for input in &sim.inputs {
-            let count = manifest
-                .links
-                .iter()
-                .filter(|link| link.to.endpoint == sim.endpoint && link.to.input == input.name)
-                .count();
-
-            match count {
-                0 => {
-                    return Err(CoreError::MissingInputLink {
-                        endpoint: sim.endpoint.clone(),
-                        input: input.name.clone(),
-                    });
-                }
-                1 => {}
-                _ => {
-                    return Err(CoreError::AmbiguousInputLink {
-                        endpoint: sim.endpoint.clone(),
-                        input: input.name.clone(),
-                    });
-                }
             }
         }
     }
@@ -239,7 +215,7 @@ mod tests {
                 max_frames: Some(1),
             },
             simulations: vec![sim],
-            links: Vec::new(),
+            routes: Vec::new(),
         }
     }
 
@@ -301,6 +277,48 @@ mod tests {
             err,
             CoreError::DuplicateOutput { endpoint, output }
                 if endpoint == "127.0.0.1:7001" && output == "value"
+        ));
+    }
+
+    #[test]
+    fn allows_local_inputs_without_routes() {
+        let manifest = manifest_with_sim(simulation(
+            vec![InputConfig {
+                name: "remote_value".to_string(),
+                ty: PrimitiveType::Float32,
+            }],
+            Vec::new(),
+        ));
+
+        validate_manifest(&manifest).expect("input may be fed by another process");
+    }
+
+    #[test]
+    fn rejects_routes_from_remote_sources() {
+        let mut manifest = manifest_with_sim(simulation(
+            Vec::new(),
+            vec![OutputConfig {
+                name: "value".to_string(),
+                ty: PrimitiveType::Float32,
+            }],
+        ));
+        manifest.routes.push(RouteConfig {
+            from: RouteFrom {
+                endpoint: "127.0.0.2:7001".to_string(),
+                output: "value".to_string(),
+            },
+            to: RouteTo {
+                endpoint: "127.0.0.1:7001".to_string(),
+                input: "value".to_string(),
+            },
+        });
+
+        let err = validate_manifest(&manifest).expect_err("remote source should fail");
+
+        assert!(matches!(
+            err,
+            CoreError::RouteSourceNotLocal { endpoint }
+                if endpoint == "127.0.0.2:7001"
         ));
     }
 }

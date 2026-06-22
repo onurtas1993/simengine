@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     sync::Arc,
@@ -13,9 +14,38 @@ pub struct NetworkMessage {
     pub payload: Vec<u8>,
 }
 
+#[derive(Default)]
+pub struct NetworkSender {
+    streams: HashMap<String, TcpStream>,
+}
+
+impl NetworkSender {
+    pub fn send(&mut self, endpoint: &str, message: &NetworkMessage) -> io::Result<()> {
+        match self.write_to_endpoint(endpoint, message) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.streams.remove(endpoint);
+                self.write_to_endpoint(endpoint, message).map_err(|_| err)
+            }
+        }
+    }
+
+    fn write_to_endpoint(&mut self, endpoint: &str, message: &NetworkMessage) -> io::Result<()> {
+        if !self.streams.contains_key(endpoint) {
+            self.streams
+                .insert(endpoint.to_string(), connect_stream(endpoint)?);
+        }
+
+        let stream = self
+            .streams
+            .get_mut(endpoint)
+            .expect("stream was just inserted");
+        write_message(stream, message)
+    }
+}
+
 pub fn send(endpoint: &str, message: &NetworkMessage) -> io::Result<()> {
-    let mut stream = TcpStream::connect(endpoint)?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let mut stream = connect_stream(endpoint)?;
     write_message(&mut stream, message)
 }
 
@@ -35,14 +65,39 @@ where
             };
 
             let on_message = Arc::clone(&on_message);
-            thread::spawn(move || match read_message(&mut stream) {
-                Ok(message) => on_message(message),
-                Err(err) => eprintln!("[network] failed to read message: {err}"),
+            thread::spawn(move || {
+                loop {
+                    match read_message(&mut stream) {
+                        Ok(message) => on_message(message),
+                        Err(err) if is_connection_closed(&err) => break,
+                        Err(err) => {
+                            eprintln!("[network] failed to read message: {err}");
+                            break;
+                        }
+                    }
+                }
             });
         }
     });
 
     Ok(handle)
+}
+
+fn connect_stream(endpoint: &str) -> io::Result<TcpStream> {
+    let stream = TcpStream::connect(endpoint)?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
+fn is_connection_closed(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::UnexpectedEof
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::BrokenPipe
+    )
 }
 
 fn write_message(stream: &mut TcpStream, message: &NetworkMessage) -> io::Result<()> {
