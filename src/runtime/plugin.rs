@@ -1,4 +1,7 @@
-use super::host::{HostContext, HostShared, host_get_input, host_log, host_set_output};
+use super::host::{
+    HostContext, HostShared, host_get_input, host_log, host_set_output, host_set_state,
+};
+use super::state_machine::StateMachine;
 use crate::{
     core::{Manifest, SimulationConfig},
     plugin_api::{GetSimApiFn, SIMENGINE_API_VERSION, SimApi, SimContext},
@@ -26,6 +29,7 @@ impl LoadedSim {
         sim: &SimulationConfig,
         plugin_path: &Path,
         shared: Arc<Mutex<HostShared>>,
+        state_machine: Arc<Mutex<StateMachine>>,
         local_endpoints: HashSet<String>,
     ) -> Result<Self> {
         let lib = unsafe { Library::new(plugin_path) }
@@ -35,12 +39,19 @@ impl LoadedSim {
         ensure_api_version(sim, &api)?;
 
         let config_json = CString::new(serde_json::to_string(&sim.params)?)?;
-        let mut host_ctx = Box::new(HostContext::new(manifest, sim, shared, local_endpoints));
+        let mut host_ctx = Box::new(HostContext::new(
+            manifest,
+            sim,
+            shared,
+            state_machine,
+            local_endpoints,
+        ));
         let ctx = SimContext {
             user_data: (&mut *host_ctx) as *mut HostContext as *mut c_void,
             log: host_log,
             set_output: host_set_output,
             get_input: host_get_input,
+            set_state: host_set_state,
         };
 
         let instance = (api.create)(ctx, config_json.as_ptr());

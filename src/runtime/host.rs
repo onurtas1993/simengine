@@ -1,5 +1,6 @@
+use super::state_machine::StateMachine;
 use crate::{
-    core::{Manifest, RouteConfig, SimulationConfig},
+    core::{Manifest, RouteConfig, SimulationConfig, SimulationState},
     network::{self, NetworkMessage, NetworkSender},
     plugin_api::SimLogLevel,
 };
@@ -26,6 +27,7 @@ pub struct HostContext {
     local_endpoints: HashSet<String>,
     network_sender: NetworkSender,
     shared: Arc<Mutex<HostShared>>,
+    state_machine: Arc<Mutex<StateMachine>>,
 }
 
 impl HostContext {
@@ -33,6 +35,7 @@ impl HostContext {
         manifest: &Manifest,
         sim: &SimulationConfig,
         shared: Arc<Mutex<HostShared>>,
+        state_machine: Arc<Mutex<StateMachine>>,
         local_endpoints: HashSet<String>,
     ) -> Self {
         Self {
@@ -42,6 +45,7 @@ impl HostContext {
             local_endpoints,
             network_sender: NetworkSender::default(),
             shared,
+            state_machine,
         }
     }
 }
@@ -91,6 +95,30 @@ pub extern "C" fn host_get_input(
     }
 
     read_input(ctx, &input, out_payload, out_payload_len)
+}
+
+pub extern "C" fn host_set_state(user_data: *mut c_void, state: *const c_char) {
+    let Some(ctx) = host_context(user_data) else {
+        return;
+    };
+    let Some(state) = c_string_lossy(state) else {
+        return;
+    };
+
+    let Ok(state) = serde_json::from_value::<SimulationState>(serde_json::Value::String(state))
+    else {
+        eprintln!(
+            "[runner] simulation '{}' reported invalid state",
+            ctx.sim_name
+        );
+        return;
+    };
+
+    if let Ok(mut state_machine) = ctx.state_machine.lock() {
+        state_machine.set_simulation_state(ctx.sim_name.clone(), state);
+    }
+
+    println!("[runner] simulation '{}' state -> {state:?}", ctx.sim_name);
 }
 
 pub fn start_network_listeners(

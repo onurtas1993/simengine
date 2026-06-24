@@ -1,3 +1,10 @@
+mod state;
+
+pub use state::{
+    EngineState, SimulationState, SimulationStateCondition, StateTransitionCondition,
+    StateTransitionConfig,
+};
+
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::Path};
 use thiserror::Error;
@@ -39,6 +46,15 @@ pub enum CoreError {
         input: String,
         input_type: PrimitiveType,
     },
+
+    #[error("state transition references unknown simulation '{simulation}'")]
+    UnknownTransitionSimulation { simulation: String },
+
+    #[error("state transition has an empty condition")]
+    EmptyStateTransitionCondition,
+
+    #[error("state transition condition must use either 'all' or 'any', not both")]
+    AmbiguousStateTransitionCondition,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -50,6 +66,9 @@ pub struct Manifest {
 
     #[serde(default)]
     pub routes: Vec<RouteConfig>,
+
+    #[serde(default)]
+    pub state_transitions: Vec<StateTransitionConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -200,6 +219,8 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
         }
     }
 
+    state::validate_state_transitions(&manifest.state_transitions, &manifest.simulations)?;
+
     Ok(())
 }
 
@@ -216,6 +237,7 @@ mod tests {
             },
             simulations: vec![sim],
             routes: Vec::new(),
+            state_transitions: Vec::new(),
         }
     }
 
@@ -320,5 +342,44 @@ mod tests {
             CoreError::RouteSourceNotLocal { endpoint }
                 if endpoint == "127.0.0.2:7001"
         ));
+    }
+
+    #[test]
+    fn rejects_state_transition_for_unknown_simulation() {
+        let mut manifest = manifest_with_sim(simulation(Vec::new(), Vec::new()));
+        manifest.state_transitions.push(StateTransitionConfig {
+            when: StateTransitionCondition {
+                all: vec![SimulationStateCondition {
+                    sim: "missing".to_string(),
+                    state: SimulationState::_READY,
+                }],
+                any: Vec::new(),
+            },
+            engine: EngineState::RUNNING,
+        });
+
+        let err = validate_manifest(&manifest).expect_err("unknown simulation should fail");
+
+        assert!(matches!(
+            err,
+            CoreError::UnknownTransitionSimulation { simulation }
+                if simulation == "missing"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_state_transition_condition() {
+        let mut manifest = manifest_with_sim(simulation(Vec::new(), Vec::new()));
+        manifest.state_transitions.push(StateTransitionConfig {
+            when: StateTransitionCondition {
+                all: Vec::new(),
+                any: Vec::new(),
+            },
+            engine: EngineState::RUNNING,
+        });
+
+        let err = validate_manifest(&manifest).expect_err("empty condition should fail");
+
+        assert!(matches!(err, CoreError::EmptyStateTransitionCondition));
     }
 }

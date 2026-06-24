@@ -1,10 +1,12 @@
 mod host;
 mod plugin;
+mod state_machine;
 
 use crate::core::{Manifest, load_manifest, validate_manifest};
 use anyhow::{Context, Result};
 use host::{HostShared, start_network_listeners};
 use plugin::LoadedSim;
+use state_machine::StateMachine;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -27,12 +29,19 @@ pub fn run_manifest(path: PathBuf) -> Result<()> {
 
 fn run(manifest: Manifest, base_dir: &Path) -> Result<()> {
     let shared = Arc::new(Mutex::new(HostShared::default()));
+    let state_machine = Arc::new(Mutex::new(StateMachine::new(&manifest)));
     let local_endpoints = local_endpoints(&manifest);
 
     let _listeners = start_network_listeners(&manifest, Arc::clone(&shared))?;
-    let mut sims = load_simulations(&manifest, base_dir, Arc::clone(&shared), local_endpoints)?;
+    let mut sims = load_simulations(
+        &manifest,
+        base_dir,
+        Arc::clone(&shared),
+        Arc::clone(&state_machine),
+        local_endpoints,
+    )?;
 
-    run_frames(&manifest, &mut sims);
+    run_frames(&manifest, &mut sims, Arc::clone(&state_machine));
     destroy_simulations(&mut sims);
 
     Ok(())
@@ -54,6 +63,7 @@ fn load_simulations(
     manifest: &Manifest,
     base_dir: &Path,
     shared: Arc<Mutex<HostShared>>,
+    state_machine: Arc<Mutex<StateMachine>>,
     local_endpoints: HashSet<String>,
 ) -> Result<Vec<LoadedSim>> {
     let mut sims = Vec::new();
@@ -72,6 +82,7 @@ fn load_simulations(
             sim,
             &plugin_path,
             Arc::clone(&shared),
+            Arc::clone(&state_machine),
             local_endpoints.clone(),
         )
         .with_context(|| format!("failed to load simulation '{}'", sim.name))?;
@@ -82,7 +93,11 @@ fn load_simulations(
     Ok(sims)
 }
 
-fn run_frames(manifest: &Manifest, sims: &mut [LoadedSim]) {
+fn run_frames(
+    manifest: &Manifest,
+    sims: &mut [LoadedSim],
+    state_machine: Arc<Mutex<StateMachine>>,
+) {
     let fps = manifest.framework.fps.max(1);
     let dt = 1.0 / fps as f64;
     let frame_duration = Duration::from_secs_f64(dt);
@@ -102,19 +117,40 @@ fn run_frames(manifest: &Manifest, sims: &mut [LoadedSim]) {
     let run_started = Instant::now();
     let mut frame: u64 = 0;
 
-    while max_frames.is_none_or(|max_frames| frame < max_frames) {
-        let frame_started = Instant::now();
-        println!("[runner] frame {frame} begin");
+    apply_state_transitions(&state_machine);
 
-        for sim in sims.iter_mut() {
-            sim.pre_step(dt);
+    while max_frames.is_none_or(|max_frames| frame < max_frames) {
+        let engine_state = current_engine_state(&state_machine);
+        if state_machine_is_terminal(&state_machine) {
+            println!("[runner] stopping run: engine state is {engine_state:?}");
+            break;
         }
-        for sim in sims.iter_mut() {
-            sim.step(dt);
+
+        let frame_started = Instant::now();
+        println!("[runner] frame {frame} begin engine_state={engine_state:?}");
+
+        if state_machine_should_step(&state_machine) {
+            for sim in sims.iter_mut() {
+                sim.pre_step(dt);
+            }
+            apply_state_transitions(&state_machine);
+
+            if state_machine_should_step(&state_machine) {
+                for sim in sims.iter_mut() {
+                    sim.step(dt);
+                }
+            }
+            apply_state_transitions(&state_machine);
+
+            if state_machine_should_step(&state_machine) {
+                for sim in sims.iter_mut() {
+                    sim.post_step(dt);
+                }
+            }
+        } else {
+            println!("[runner] engine is not RUNNING; skipping simulation steps");
         }
-        for sim in sims.iter_mut() {
-            sim.post_step(dt);
-        }
+        apply_state_transitions(&state_machine);
 
         sleep_until_next_frame(frame_started, frame_duration);
         log_frame_end(frame, frame_started);
@@ -123,6 +159,33 @@ fn run_frames(manifest: &Manifest, sims: &mut [LoadedSim]) {
     }
 
     log_run_end(frame, run_started);
+}
+
+fn apply_state_transitions(state_machine: &Arc<Mutex<StateMachine>>) {
+    if let Ok(mut state_machine) = state_machine.lock() {
+        state_machine.apply_transitions();
+    }
+}
+
+fn current_engine_state(state_machine: &Arc<Mutex<StateMachine>>) -> crate::core::EngineState {
+    state_machine
+        .lock()
+        .map(|state_machine| state_machine.engine_state())
+        .unwrap_or(crate::core::EngineState::ERROR)
+}
+
+fn state_machine_should_step(state_machine: &Arc<Mutex<StateMachine>>) -> bool {
+    state_machine
+        .lock()
+        .map(|state_machine| state_machine.should_step())
+        .unwrap_or(false)
+}
+
+fn state_machine_is_terminal(state_machine: &Arc<Mutex<StateMachine>>) -> bool {
+    state_machine
+        .lock()
+        .map(|state_machine| state_machine.is_terminal())
+        .unwrap_or(true)
 }
 
 fn sleep_until_next_frame(frame_started: Instant, frame_duration: Duration) {

@@ -55,6 +55,11 @@ impl SimulationContext {
         self.get_fixed_input(name).map(f32::from_le_bytes)
     }
 
+    pub fn set_state(&self, state: impl AsRef<str>) {
+        let state = CString::new(state.as_ref()).expect("state contained a NUL byte");
+        (self.raw.set_state)(self.raw.user_data, state.as_ptr());
+    }
+
     fn get_fixed_input<const N: usize>(&self, name: impl AsRef<str>) -> Option<[u8; N]> {
         let mut buffer = [0u8; N];
         match self.get_input_bytes(name, &mut buffer) {

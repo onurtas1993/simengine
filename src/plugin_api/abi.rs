@@ -1,6 +1,6 @@
 use std::ffi::{c_char, c_void};
 
-pub const SIMENGINE_API_VERSION: u32 = 1;
+pub const SIMENGINE_API_VERSION: u32 = 2;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -32,6 +32,8 @@ pub struct SimContext {
         out_payload: *mut u8,
         out_payload_len: usize,
     ) -> usize,
+
+    pub set_state: extern "C" fn(user_data: *mut c_void, state: *const c_char),
 }
 
 #[repr(C)]
