@@ -406,3 +406,9 @@ Remote flow:
 ```
 
 Flow sources must be local to `config.json`. Flow targets may be local or remote. The instrument must exist in `instruments.json`, and the same instrument name is used at both ends of the flow.
+
+## Case Study
+
+The best way to learn SimEngine is by exploring a working example. For a complete case study, see the xplane-autopilot project below, which demonstrates a flight simulation built on top of SimEngine.
+
+https://github.com/onurtas1993/xplane-autopilot/releases
