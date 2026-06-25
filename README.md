@@ -7,6 +7,12 @@
     <td>
 
 # SimEngine
+[![Test Status](https://github.com/onurtas1993/simengine/actions/workflows/ci.yml/badge.svg)](https://github.com/onurtas1993/simengine/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/simengine.svg)](https://crates.io/crates/simengine)
+[![API](https://docs.rs/simengine/badge.svg)](https://docs.rs/simengine)
+[![Book](https://img.shields.io/badge/book-online-blue.svg)](https://<username>.github.io/simengine/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](https://www.rust-lang.org/)
 
 SimEngine is a plugin-based simulation runtime for composing independent simulations through typed instruments, instrument flows, and runtime state transitions.
     </td>
