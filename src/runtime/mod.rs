@@ -146,7 +146,6 @@ fn run_frames(
         }
 
         let frame_started = Instant::now();
-        println!("[runner] frame {frame} begin engine_state={engine_state:?}");
 
         if state_machine_should_step(&state_machine) {
             for sim in sims.iter_mut() {
@@ -166,13 +165,10 @@ fn run_frames(
                     sim.post_step(dt);
                 }
             }
-        } else {
-            println!("[runner] engine is not RUNNING; skipping simulation steps");
         }
         apply_state_transitions(&state_machine);
 
         sleep_until_next_frame(frame_started, frame_duration);
-        log_frame_end(frame, frame_started);
 
         frame += 1;
     }
@@ -212,19 +208,6 @@ fn sleep_until_next_frame(frame_started: Instant, frame_duration: Duration) {
     if elapsed < frame_duration {
         thread::sleep(frame_duration - elapsed);
     }
-}
-
-fn log_frame_end(frame: u64, frame_started: Instant) {
-    let actual_frame_time = frame_started.elapsed().as_secs_f64();
-    let actual_fps = if actual_frame_time > 0.0 {
-        1.0 / actual_frame_time
-    } else {
-        0.0
-    };
-
-    println!(
-        "[runner] frame {frame} end actual_dt={actual_frame_time:.6}s actual_fps={actual_fps:.2}"
-    );
 }
 
 fn log_run_end(frame: u64, run_started: Instant) {
