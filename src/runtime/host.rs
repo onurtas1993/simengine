@@ -1,6 +1,6 @@
 use super::state_machine::StateMachine;
 use crate::{
-    core::{Manifest, RouteConfig, SimulationConfig, SimulationState},
+    core::{InstrumentFlow, Manifest, SimulationConfig, SimulationState},
     network::{self, NetworkMessage, NetworkSender},
     plugin_api::SimLogLevel,
 };
@@ -23,7 +23,7 @@ pub struct HostShared {
 pub struct HostContext {
     sim_name: String,
     endpoint: String,
-    routes: Vec<RouteConfig>,
+    flows: Vec<InstrumentFlow>,
     local_endpoints: HashSet<String>,
     network_sender: NetworkSender,
     shared: Arc<Mutex<HostShared>>,
@@ -32,7 +32,8 @@ pub struct HostContext {
 
 impl HostContext {
     pub fn new(
-        manifest: &Manifest,
+        _manifest: &Manifest,
+        flows: &[InstrumentFlow],
         sim: &SimulationConfig,
         shared: Arc<Mutex<HostShared>>,
         state_machine: Arc<Mutex<StateMachine>>,
@@ -41,7 +42,7 @@ impl HostContext {
         Self {
             sim_name: sim.name.clone(),
             endpoint: sim.endpoint.clone(),
-            routes: manifest.routes.clone(),
+            flows: flows.to_vec(),
             local_endpoints,
             network_sender: NetworkSender::default(),
             shared,
@@ -158,27 +159,27 @@ fn store_output(ctx: &mut HostContext, output: &str, payload: Vec<u8>) {
 
     println!("[runner] set_output {output_key} = {} bytes", payload.len());
 
-    let routes = ctx
-        .routes
+    let flows = ctx
+        .flows
         .iter()
-        .filter(|route| route.from.endpoint == ctx.endpoint && route.from.output == output)
+        .filter(|flow| flow.from == ctx.endpoint && flow.instrument == output)
         .cloned()
         .collect::<Vec<_>>();
 
-    for route in routes {
-        deliver_routed_output(ctx, &route, &output_key, &payload);
+    for flow in flows {
+        deliver_routed_output(ctx, &flow, &output_key, &payload);
     }
 }
 
 fn deliver_routed_output(
     ctx: &mut HostContext,
-    route: &RouteConfig,
+    flow: &InstrumentFlow,
     output_key: &str,
     payload: &[u8],
 ) {
-    let target_key = value_key(&route.to.endpoint, &route.to.input);
+    let target_key = value_key(&flow.to, &flow.instrument);
 
-    if ctx.local_endpoints.contains(&route.to.endpoint) {
+    if ctx.local_endpoints.contains(&flow.to) {
         if let Ok(mut shared) = ctx.shared.lock() {
             shared.values.insert(target_key.clone(), payload.to_vec());
         }
@@ -187,11 +188,11 @@ fn deliver_routed_output(
     }
 
     let message = NetworkMessage {
-        input: route.to.input.clone(),
+        input: flow.instrument.clone(),
         payload: payload.to_vec(),
     };
 
-    match ctx.network_sender.send(&route.to.endpoint, &message) {
+    match ctx.network_sender.send(&flow.to, &message) {
         Ok(()) => println!("[network] sent {output_key} -> {target_key}"),
         Err(err) => eprintln!("[network] failed to send {output_key} -> {target_key}: {err}"),
     }

@@ -1,41 +1,53 @@
 {
   "framework": {
-    "fps": 60
+    "fps": 60,
+    "log_level": "info",
+    "max_frames": null
   },
-
   "simulations": [
     {
-      "name": "<simulation-name>",
+      "name": "<simulation-name-1>",
       "endpoint": "127.0.0.1:7001",
-      "plugin": "<plugin-file>",
-
-      "inputs": [
-        {
-          "name": "<input-name>",
-          "type": "<data-type>"
-        }
-      ],
-
-      "outputs": [
-        {
-          "name": "<output-name>",
-          "type": "<data-type>"
-        }
-      ]
+      "plugin": "<plugin-file-1>",
+      "params": {}
+    },
+    {
+      "name": "<simulation-name-2>",
+      "endpoint": "127.0.0.1:7002",
+      "plugin": "<plugin-file-2>",
+      "params": {}
     }
   ],
-
-  "links": [
+  "state_transitions": [
     {
-      "from": {
-        "endpoint": "127.0.0.1:7001",
-        "output": "<output-name>"
+      "when": {
+        "all": [
+          {
+            "sim": "<simulation-name-1>",
+            "state": "_READY"
+          },
+          {
+            "sim": "<simulation-name-2>",
+            "state": "_READY"
+          }
+        ]
       },
-
-      "to": {
-        "endpoint": "127.0.0.1:7002",
-        "input": "<input-name>"
-      }
+      "engine": "RUNNING"
+    },
+    {
+      "when": {
+        "any": [
+          {
+            "sim": "<simulation-name-1>",
+            "state": "_ERROR"
+          },
+          {
+            "sim": "<simulation-name-2>",
+            "state": "_ERROR"
+          }
+        ]
+      },
+      "engine": "ERROR"
     }
   ]
 }

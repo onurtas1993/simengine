@@ -2,7 +2,10 @@ mod host;
 mod plugin;
 mod state_machine;
 
-use crate::core::{Manifest, load_manifest, validate_manifest};
+use crate::core::{
+    InstrumentFlow, Manifest, load_instrument_flows, load_instruments, load_manifest,
+    validate_manifest,
+};
 use anyhow::{Context, Result};
 use host::{HostShared, start_network_listeners};
 use plugin::LoadedSim;
@@ -16,18 +19,23 @@ use std::{
 };
 
 pub fn check_manifest(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
     let manifest = load_manifest(path)?;
-    validate_manifest(&manifest)?;
+    let instruments = load_instruments(instruments_path(path))?;
+    let flows = load_instrument_flows(instrument_flows_path(path))?;
+    validate_manifest(&manifest, &instruments, &flows)?;
     Ok(())
 }
 
 pub fn run_manifest(path: PathBuf) -> Result<()> {
     let manifest = load_manifest(&path)?;
-    validate_manifest(&manifest)?;
-    run(manifest, manifest_base_dir(&path))
+    let instruments = load_instruments(instruments_path(&path))?;
+    let flows = load_instrument_flows(instrument_flows_path(&path))?;
+    validate_manifest(&manifest, &instruments, &flows)?;
+    run(manifest, flows, manifest_base_dir(&path))
 }
 
-fn run(manifest: Manifest, base_dir: &Path) -> Result<()> {
+fn run(manifest: Manifest, flows: Vec<InstrumentFlow>, base_dir: &Path) -> Result<()> {
     let shared = Arc::new(Mutex::new(HostShared::default()));
     let state_machine = Arc::new(Mutex::new(StateMachine::new(&manifest)));
     let local_endpoints = local_endpoints(&manifest);
@@ -35,6 +43,7 @@ fn run(manifest: Manifest, base_dir: &Path) -> Result<()> {
     let _listeners = start_network_listeners(&manifest, Arc::clone(&shared))?;
     let mut sims = load_simulations(
         &manifest,
+        &flows,
         base_dir,
         Arc::clone(&shared),
         Arc::clone(&state_machine),
@@ -51,6 +60,14 @@ fn manifest_base_dir(path: &Path) -> &Path {
     path.parent().unwrap_or_else(|| Path::new("."))
 }
 
+fn instruments_path(manifest_path: &Path) -> PathBuf {
+    manifest_base_dir(manifest_path).join("instruments.json")
+}
+
+fn instrument_flows_path(manifest_path: &Path) -> PathBuf {
+    manifest_base_dir(manifest_path).join("instrument_flows.json")
+}
+
 fn local_endpoints(manifest: &Manifest) -> HashSet<String> {
     manifest
         .simulations
@@ -61,6 +78,7 @@ fn local_endpoints(manifest: &Manifest) -> HashSet<String> {
 
 fn load_simulations(
     manifest: &Manifest,
+    flows: &[InstrumentFlow],
     base_dir: &Path,
     shared: Arc<Mutex<HostShared>>,
     state_machine: Arc<Mutex<StateMachine>>,
@@ -79,6 +97,7 @@ fn load_simulations(
 
         let loaded = LoadedSim::load(
             manifest,
+            flows,
             sim,
             &plugin_path,
             Arc::clone(&shared),

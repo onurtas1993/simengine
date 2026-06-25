@@ -3,7 +3,7 @@ use super::host::{
 };
 use super::state_machine::StateMachine;
 use crate::{
-    core::{Manifest, SimulationConfig},
+    core::{InstrumentFlow, Manifest, SimulationConfig},
     plugin_api::{GetSimApiFn, SIMENGINE_API_VERSION, SimApi, SimContext},
 };
 use anyhow::{Context, Result};
@@ -26,6 +26,7 @@ pub struct LoadedSim {
 impl LoadedSim {
     pub fn load(
         manifest: &Manifest,
+        flows: &[InstrumentFlow],
         sim: &SimulationConfig,
         plugin_path: &Path,
         shared: Arc<Mutex<HostShared>>,
@@ -41,6 +42,7 @@ impl LoadedSim {
         let config_json = CString::new(serde_json::to_string(&sim.params)?)?;
         let mut host_ctx = Box::new(HostContext::new(
             manifest,
+            flows,
             sim,
             shared,
             state_machine,

@@ -60,17 +60,17 @@ impl StateMachine {
     }
 
     fn condition_matches(&self, condition: &StateTransitionCondition) -> bool {
-        if !condition.all.is_empty() {
-            return condition
+        match (!condition.all.is_empty(), !condition.any.is_empty()) {
+            (true, _) => condition
                 .all
                 .iter()
-                .all(|item| self.simulation_state(&item.sim) == item.state);
+                .all(|item| self.simulation_state(&item.sim) == item.state),
+            (false, true) => condition
+                .any
+                .iter()
+                .any(|item| self.simulation_state(&item.sim) == item.state),
+            (false, false) => false,
         }
-
-        condition
-            .any
-            .iter()
-            .any(|item| self.simulation_state(&item.sim) == item.state)
     }
 
     fn simulation_state(&self, sim_name: &str) -> SimulationState {

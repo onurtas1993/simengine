@@ -8,7 +8,7 @@
 
 # SimEngine
 
-SimEngine is a plugin-based simulation runtime for composing independent simulations through typed inputs, outputs, routes, and runtime state transitions.
+SimEngine is a plugin-based simulation runtime for composing independent simulations through typed instruments, instrument flows, and runtime state transitions.
     </td>
   </tr>
 </table>
@@ -16,9 +16,9 @@ SimEngine is a plugin-based simulation runtime for composing independent simulat
 This repository is packaged as a single Rust crate named `simengine`. It includes:
 
 - CLI/runtime
-- Manifest/config validation
+- Manifest, instrument, and flow validation
 - Plugin ABI/API
-- TCP routing between simulations
+- TCP instrument flow between simulations
 - Engine and simulation state management
 
 
@@ -33,13 +33,13 @@ cargo install simengine
 Run a manifest:
 
 ```bash
-simengine run simconfig.json
+simengine run config.json
 ```
 
 Validate a manifest without running it:
 
 ```bash
-simengine check simconfig.json
+simengine check config.json
 ```
 
 When `framework.max_frames` is omitted, the engine runs indefinitely unless it enters a terminal state.
@@ -66,7 +66,7 @@ _FINISHED
 _ERROR
 ```
 
-These states are built into the engine. They are not declared or customized in `simconfig.json`.
+These states are built into the engine. They are not declared or customized in `config.json`.
 
 The engine starts in `START`. Each simulation starts in `_START`. During `Simulation::create`, a plugin should report whether it initialized successfully:
 
@@ -82,9 +82,22 @@ ctx.set_state("_ERROR");
 
 The engine evaluates `state_transitions` after simulations are loaded and during the run loop. `pre_step`, `step`, and `post_step` are called only while the engine state is `RUNNING`. `ERROR` and `FINISHED` are terminal runtime states.
 
-## Manifest format - from a working environment
+## Minimum One-Machine Example
 
-Machine 1:
+SimEngine loads three files from the same directory:
+
+```text
+config.json
+instruments.json
+instrument_flows.json
+```
+
+This example runs two simulations on one machine:
+
+- `temperature-reader` produces `temperature_c`
+- `fan-controller` consumes `temperature_c`
+
+`config.json` declares the runtime, simulations, plugins, and state transitions:
 
 ```json
 {
@@ -93,71 +106,22 @@ Machine 1:
   },
   "simulations": [
     {
-      "name": "xplane-health-check",
-      "endpoint": "127.0.0.1:7000",
-      "plugin": "xplane_health_check.dll",
-      "inputs": [],
-      "outputs": []
-    },
-    {
-      "name": "xplane-datarefs-reader",
+      "name": "temperature-reader",
       "endpoint": "127.0.0.1:7001",
-      "plugin": "xplane_datarefs_reader.dll",
-      "inputs": [],
-      "outputs": [
-        { "name": "altitude_ft", "type": "float32" },
-        { "name": "heading_deg", "type": "float32" },
-        { "name": "roll_deg", "type": "float32" },
-        { "name": "pitch_deg", "type": "float32" },
-        { "name": "airspeed_kt", "type": "float32" },
-        { "name": "vertical_speed_fpm", "type": "float32" }
-      ]
+      "plugin": "temperature_reader.dll"
     },
     {
-      "name": "xplane-datarefs-sender",
+      "name": "fan-controller",
       "endpoint": "127.0.0.1:7002",
-      "plugin": "xplane_datarefs_sender.dll",
-      "inputs": [
-        { "name": "yoke_pitch_ratio", "type": "float32" },
-        { "name": "yoke_roll_ratio", "type": "float32" },
-        { "name": "throttle_ratio", "type": "float32" }
-      ],
-      "outputs": []
-    }
-  ],
-  "routes": [
-    {
-      "from": { "endpoint": "127.0.0.1:7001", "output": "altitude_ft" },
-      "to": { "endpoint": "127.0.0.2:7001", "input": "altitude_ft" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.1:7001", "output": "heading_deg" },
-      "to": { "endpoint": "127.0.0.2:7001", "input": "heading_deg" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.1:7001", "output": "roll_deg" },
-      "to": { "endpoint": "127.0.0.2:7001", "input": "roll_deg" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.1:7001", "output": "pitch_deg" },
-      "to": { "endpoint": "127.0.0.2:7001", "input": "pitch_deg" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.1:7001", "output": "airspeed_kt" },
-      "to": { "endpoint": "127.0.0.2:7001", "input": "airspeed_kt" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.1:7001", "output": "vertical_speed_fpm" },
-      "to": { "endpoint": "127.0.0.2:7001", "input": "vertical_speed_fpm" }
+      "plugin": "fan_controller.dll"
     }
   ],
   "state_transitions": [
     {
       "when": {
         "all": [
-          { "sim": "xplane-health-check", "state": "_READY" },
-          { "sim": "xplane-datarefs-reader", "state": "_READY" },
-          { "sim": "xplane-datarefs-sender", "state": "_READY" }
+          { "sim": "temperature-reader", "state": "_READY" },
+          { "sim": "fan-controller", "state": "_READY" }
         ]
       },
       "engine": "RUNNING"
@@ -165,9 +129,8 @@ Machine 1:
     {
       "when": {
         "any": [
-          { "sim": "xplane-health-check", "state": "_ERROR" },
-          { "sim": "xplane-datarefs-reader", "state": "_ERROR" },
-          { "sim": "xplane-datarefs-sender", "state": "_ERROR" }
+          { "sim": "temperature-reader", "state": "_ERROR" },
+          { "sim": "fan-controller", "state": "_ERROR" }
         ]
       },
       "engine": "ERROR"
@@ -176,67 +139,29 @@ Machine 1:
 }
 ```
 
-Machine 2:
+`instruments.json` declares typed values once:
 
 ```json
-{
-  "framework": {
-    "fps": 60
-  },
-  "simulations": [
-    {
-      "name": "basic-autopilot",
-      "endpoint": "127.0.0.2:7001",
-      "plugin": "basic_autopilot.dll",
-      "inputs": [
-        { "name": "altitude_ft", "type": "float32" },
-        { "name": "heading_deg", "type": "float32" },
-        { "name": "roll_deg", "type": "float32" },
-        { "name": "pitch_deg", "type": "float32" },
-        { "name": "airspeed_kt", "type": "float32" },
-        { "name": "vertical_speed_fpm", "type": "float32" }
-      ],
-      "outputs": [
-        { "name": "yoke_pitch_ratio", "type": "float32" },
-        { "name": "yoke_roll_ratio", "type": "float32" },
-        { "name": "throttle_ratio", "type": "float32" }
-      ]
-    }
-  ],
-  "routes": [
-    {
-      "from": { "endpoint": "127.0.0.2:7001", "output": "yoke_pitch_ratio" },
-      "to": { "endpoint": "127.0.0.1:7002", "input": "yoke_pitch_ratio" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.2:7001", "output": "yoke_roll_ratio" },
-      "to": { "endpoint": "127.0.0.1:7002", "input": "yoke_roll_ratio" }
-    },
-    {
-      "from": { "endpoint": "127.0.0.2:7001", "output": "throttle_ratio" },
-      "to": { "endpoint": "127.0.0.1:7002", "input": "throttle_ratio" }
-    }
-  ],
-  "state_transitions": [
-    {
-      "when": {
-        "all": [
-          { "sim": "basic-autopilot", "state": "_READY" }
-        ]
-      },
-      "engine": "RUNNING"
-    },
-    {
-      "when": {
-        "any": [
-          { "sim": "basic-autopilot", "state": "_ERROR" }
-        ]
-      },
-      "engine": "ERROR"
-    }
-  ]
-}
+[
+  {
+    "value": "temperature_c",
+    "type": "float32"
+  }
+]
 ```
+
+`instrument_flows.json` declares where instrument values move:
+
+```json
+[
+  {
+    "instrument": "temperature_c",
+    "from": "127.0.0.1:7001",
+    "to": "127.0.0.1:7002"
+  }
+]
+```
+
 Currently supported primitive types:
 
 ```text
@@ -449,26 +374,28 @@ ctx.set_output_f32("output_name", value);
 ctx.get_input_f32("input_name");
 ```
 
-## Distributed Routing
+## Instrument Flows
 
-Routes can target simulations in the same engine process or endpoints hosted by another `simengine` process.
+Instrument flows can target simulations in the same engine process or endpoints hosted by another `simengine` process.
 
-Local route:
-
-```json
-{
-  "from": { "endpoint": "127.0.0.1:7001", "output": "value" },
-  "to": { "endpoint": "127.0.0.1:7002", "input": "value" }
-}
-```
-
-Remote route:
+Local flow:
 
 ```json
 {
-  "from": { "endpoint": "127.0.0.1:7001", "output": "value" },
-  "to": { "endpoint": "127.0.0.2:7001", "input": "value" }
+  "instrument": "temperature_c",
+  "from": "127.0.0.1:7001",
+  "to": "127.0.0.1:7002"
 }
 ```
 
-Route sources must be local to the manifest. Route targets may be local or remote. If a route target is local, validation checks that the input exists and that the types match.
+Remote flow:
+
+```json
+{
+  "instrument": "temperature_c",
+  "from": "127.0.0.1:7001",
+  "to": "127.0.0.2:7001"
+}
+```
+
+Flow sources must be local to `config.json`. Flow targets may be local or remote. The instrument must exist in `instruments.json`, and the same instrument name is used at both ends of the flow.

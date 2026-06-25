@@ -9,43 +9,57 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::Path};
 use thiserror::Error;
 
+type EndpointMap<'a> = HashMap<&'a str, &'a SimulationConfig>;
+type InstrumentMap<'a> = HashMap<&'a str, &'a InstrumentConfig>;
+
+struct ManifestDeclarations<'a> {
+    endpoints: EndpointMap<'a>,
+    instruments: InstrumentMap<'a>,
+}
+
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("failed to read manifest: {0}")]
-    ReadManifest(#[from] std::io::Error),
+    ReadManifest(std::io::Error),
 
     #[error("invalid manifest json: {0}")]
-    InvalidManifest(#[from] serde_json::Error),
+    InvalidManifest(serde_json::Error),
+
+    #[error("failed to read instruments file '{path}': {source}")]
+    ReadInstruments {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[error("invalid instruments json in '{path}': {source}")]
+    InvalidInstruments {
+        path: String,
+        source: serde_json::Error,
+    },
+
+    #[error("failed to read instrument flows file '{path}': {source}")]
+    ReadInstrumentFlows {
+        path: String,
+        source: std::io::Error,
+    },
+
+    #[error("invalid instrument flows json in '{path}': {source}")]
+    InvalidInstrumentFlows {
+        path: String,
+        source: serde_json::Error,
+    },
 
     #[error("duplicate simulation endpoint '{endpoint}'")]
     DuplicateEndpoint { endpoint: String },
 
-    #[error("duplicate output variable '{output}' on endpoint '{endpoint}'")]
-    DuplicateOutput { endpoint: String, output: String },
+    #[error("duplicate instrument '{instrument}'")]
+    DuplicateInstrument { instrument: String },
 
-    #[error("duplicate input variable '{input}' on endpoint '{endpoint}'")]
-    DuplicateInput { endpoint: String, input: String },
+    #[error("instrument flow source endpoint '{endpoint}' is not declared in this config")]
+    FlowSourceNotLocal { endpoint: String },
 
-    #[error("route source endpoint '{endpoint}' is not declared in this config")]
-    RouteSourceNotLocal { endpoint: String },
-
-    #[error("route source output '{output}' does not exist on endpoint '{endpoint}'")]
-    MissingRouteOutput { endpoint: String, output: String },
-
-    #[error("route target input '{input}' does not exist on local endpoint '{endpoint}'")]
-    MissingRouteInput { endpoint: String, input: String },
-
-    #[error(
-        "route type mismatch: {from_endpoint}/{output} is {output_type:?}, but {to_endpoint}/{input} is {input_type:?}"
-    )]
-    RouteTypeMismatch {
-        from_endpoint: String,
-        output: String,
-        output_type: PrimitiveType,
-        to_endpoint: String,
-        input: String,
-        input_type: PrimitiveType,
-    },
+    #[error("instrument flow references unknown instrument '{instrument}'")]
+    UnknownFlowInstrument { instrument: String },
 
     #[error("state transition references unknown simulation '{simulation}'")]
     UnknownTransitionSimulation { simulation: String },
@@ -63,9 +77,6 @@ pub struct Manifest {
 
     #[serde(default)]
     pub simulations: Vec<SimulationConfig>,
-
-    #[serde(default)]
-    pub routes: Vec<RouteConfig>,
 
     #[serde(default)]
     pub state_transitions: Vec<StateTransitionConfig>,
@@ -93,47 +104,22 @@ pub struct SimulationConfig {
     pub plugin: String,
 
     #[serde(default)]
-    pub inputs: Vec<InputConfig>,
-
-    #[serde(default)]
-    pub outputs: Vec<OutputConfig>,
-
-    #[serde(default)]
     pub params: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct InputConfig {
-    pub name: String,
+pub struct InstrumentConfig {
+    pub value: String,
 
     #[serde(rename = "type")]
     pub ty: PrimitiveType,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct OutputConfig {
-    pub name: String,
-
-    #[serde(rename = "type")]
-    pub ty: PrimitiveType,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RouteConfig {
-    pub from: RouteFrom,
-    pub to: RouteTo,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RouteFrom {
-    pub endpoint: String,
-    pub output: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RouteTo {
-    pub endpoint: String,
-    pub input: String,
+pub struct InstrumentFlow {
+    pub instrument: String,
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -143,83 +129,111 @@ pub enum PrimitiveType {
 }
 
 pub fn load_manifest(path: impl AsRef<Path>) -> Result<Manifest, CoreError> {
-    let text = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&text)?)
+    let text = fs::read_to_string(path).map_err(CoreError::ReadManifest)?;
+    serde_json::from_str(&text).map_err(CoreError::InvalidManifest)
 }
 
-pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
-    let mut endpoints: HashMap<&str, &SimulationConfig> = HashMap::new();
-    let mut outputs: HashMap<(String, String), &OutputConfig> = HashMap::new();
-    let mut inputs: HashMap<(String, String), &InputConfig> = HashMap::new();
+pub fn load_instruments(path: impl AsRef<Path>) -> Result<Vec<InstrumentConfig>, CoreError> {
+    let path = path.as_ref();
+    let text = fs::read_to_string(path).map_err(|source| CoreError::ReadInstruments {
+        path: path.display().to_string(),
+        source,
+    })?;
 
-    for sim in &manifest.simulations {
+    serde_json::from_str(&text).map_err(|source| CoreError::InvalidInstruments {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+pub fn load_instrument_flows(path: impl AsRef<Path>) -> Result<Vec<InstrumentFlow>, CoreError> {
+    let path = path.as_ref();
+    let text = fs::read_to_string(path).map_err(|source| CoreError::ReadInstrumentFlows {
+        path: path.display().to_string(),
+        source,
+    })?;
+
+    serde_json::from_str(&text).map_err(|source| CoreError::InvalidInstrumentFlows {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+pub fn validate_manifest(
+    manifest: &Manifest,
+    instruments: &[InstrumentConfig],
+    flows: &[InstrumentFlow],
+) -> Result<(), CoreError> {
+    let declarations = collect_declarations(&manifest.simulations, instruments)?;
+
+    validate_flows(flows, &declarations)?;
+
+    state::validate_state_transitions(&manifest.state_transitions, &manifest.simulations)?;
+
+    Ok(())
+}
+
+fn collect_declarations<'a>(
+    simulations: &'a [SimulationConfig],
+    instruments: &'a [InstrumentConfig],
+) -> Result<ManifestDeclarations<'a>, CoreError> {
+    let mut endpoints = HashMap::new();
+    let mut instrument_map = HashMap::new();
+
+    for sim in simulations {
         if endpoints.insert(sim.endpoint.as_str(), sim).is_some() {
             return Err(CoreError::DuplicateEndpoint {
                 endpoint: sim.endpoint.clone(),
             });
         }
+    }
 
-        let mut local_outputs: HashMap<&str, ()> = HashMap::new();
-        for output in &sim.outputs {
-            if local_outputs.insert(output.name.as_str(), ()).is_some() {
-                return Err(CoreError::DuplicateOutput {
-                    endpoint: sim.endpoint.clone(),
-                    output: output.name.clone(),
-                });
-            }
-            outputs.insert((sim.endpoint.clone(), output.name.clone()), output);
-        }
-
-        let mut local_inputs: HashMap<&str, ()> = HashMap::new();
-        for input in &sim.inputs {
-            if local_inputs.insert(input.name.as_str(), ()).is_some() {
-                return Err(CoreError::DuplicateInput {
-                    endpoint: sim.endpoint.clone(),
-                    input: input.name.clone(),
-                });
-            }
-            inputs.insert((sim.endpoint.clone(), input.name.clone()), input);
+    for instrument in instruments {
+        if instrument_map
+            .insert(instrument.value.as_str(), instrument)
+            .is_some()
+        {
+            return Err(CoreError::DuplicateInstrument {
+                instrument: instrument.value.clone(),
+            });
         }
     }
 
-    for route in &manifest.routes {
-        if !endpoints.contains_key(route.from.endpoint.as_str()) {
-            return Err(CoreError::RouteSourceNotLocal {
-                endpoint: route.from.endpoint.clone(),
-            });
-        }
+    Ok(ManifestDeclarations {
+        endpoints,
+        instruments: instrument_map,
+    })
+}
 
-        let output = outputs
-            .get(&(route.from.endpoint.clone(), route.from.output.clone()))
-            .ok_or_else(|| CoreError::MissingRouteOutput {
-                endpoint: route.from.endpoint.clone(),
-                output: route.from.output.clone(),
-            })?;
-
-        let input = inputs.get(&(route.to.endpoint.clone(), route.to.input.clone()));
-
-        if endpoints.contains_key(route.to.endpoint.as_str()) && input.is_none() {
-            return Err(CoreError::MissingRouteInput {
-                endpoint: route.to.endpoint.clone(),
-                input: route.to.input.clone(),
-            });
-        }
-
-        if let Some(input) = input {
-            if output.ty != input.ty {
-                return Err(CoreError::RouteTypeMismatch {
-                    from_endpoint: route.from.endpoint.clone(),
-                    output: route.from.output.clone(),
-                    output_type: output.ty.clone(),
-                    to_endpoint: route.to.endpoint.clone(),
-                    input: route.to.input.clone(),
-                    input_type: input.ty.clone(),
-                });
-            }
-        }
+fn validate_flows(
+    flows: &[InstrumentFlow],
+    declarations: &ManifestDeclarations<'_>,
+) -> Result<(), CoreError> {
+    for flow in flows {
+        validate_flow(flow, declarations)?;
     }
 
-    state::validate_state_transitions(&manifest.state_transitions, &manifest.simulations)?;
+    Ok(())
+}
+
+fn validate_flow(
+    flow: &InstrumentFlow,
+    declarations: &ManifestDeclarations<'_>,
+) -> Result<(), CoreError> {
+    if !declarations.endpoints.contains_key(flow.from.as_str()) {
+        return Err(CoreError::FlowSourceNotLocal {
+            endpoint: flow.from.clone(),
+        });
+    }
+
+    if !declarations
+        .instruments
+        .contains_key(flow.instrument.as_str())
+    {
+        return Err(CoreError::UnknownFlowInstrument {
+            instrument: flow.instrument.clone(),
+        });
+    }
 
     Ok(())
 }
@@ -228,125 +242,110 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), CoreError> {
 mod tests {
     use super::*;
 
-    fn manifest_with_sim(sim: SimulationConfig) -> Manifest {
+    fn manifest_with_sims(simulations: Vec<SimulationConfig>) -> Manifest {
         Manifest {
             framework: FrameworkConfig {
                 fps: 1,
                 log_level: "info".to_string(),
                 max_frames: Some(1),
             },
-            simulations: vec![sim],
-            routes: Vec::new(),
+            simulations,
             state_transitions: Vec::new(),
         }
     }
 
-    fn simulation(inputs: Vec<InputConfig>, outputs: Vec<OutputConfig>) -> SimulationConfig {
+    fn simulation(name: &str, endpoint: &str) -> SimulationConfig {
         SimulationConfig {
-            name: "sim".to_string(),
-            endpoint: "127.0.0.1:7001".to_string(),
+            name: name.to_string(),
+            endpoint: endpoint.to_string(),
             plugin: "sim.dll".to_string(),
-            inputs,
-            outputs,
             params: serde_json::Value::Null,
         }
     }
 
-    #[test]
-    fn rejects_duplicate_inputs_on_same_endpoint() {
-        let manifest = manifest_with_sim(simulation(
-            vec![
-                InputConfig {
-                    name: "value".to_string(),
-                    ty: PrimitiveType::Float32,
-                },
-                InputConfig {
-                    name: "value".to_string(),
-                    ty: PrimitiveType::Float32,
-                },
-            ],
-            Vec::new(),
-        ));
+    fn instrument(value: &str, ty: PrimitiveType) -> InstrumentConfig {
+        InstrumentConfig {
+            value: value.to_string(),
+            ty,
+        }
+    }
 
-        let err = validate_manifest(&manifest).expect_err("duplicate input should fail");
+    #[test]
+    fn rejects_duplicate_instruments() {
+        let manifest = manifest_with_sims(vec![simulation("sensor", "127.0.0.1:7001")]);
+        let instruments = vec![
+            instrument("temperature", PrimitiveType::Float32),
+            instrument("temperature", PrimitiveType::Float32),
+        ];
+        let flows = Vec::new();
+
+        let err =
+            validate_manifest(&manifest, &instruments, &flows).expect_err("duplicate should fail");
 
         assert!(matches!(
             err,
-            CoreError::DuplicateInput { endpoint, input }
-                if endpoint == "127.0.0.1:7001" && input == "value"
+            CoreError::DuplicateInstrument { instrument } if instrument == "temperature"
         ));
     }
 
     #[test]
-    fn rejects_duplicate_outputs_on_same_endpoint() {
-        let manifest = manifest_with_sim(simulation(
-            Vec::new(),
-            vec![
-                OutputConfig {
-                    name: "value".to_string(),
-                    ty: PrimitiveType::Float32,
-                },
-                OutputConfig {
-                    name: "value".to_string(),
-                    ty: PrimitiveType::Float32,
-                },
-            ],
-        ));
+    fn accepts_flow_when_source_and_instrument_exist() {
+        let manifest = manifest_with_sims(vec![
+            simulation("sensor", "127.0.0.1:7001"),
+            simulation("controller", "127.0.0.1:7002"),
+        ]);
+        let instruments = vec![instrument("temperature", PrimitiveType::Float32)];
+        let flows = vec![InstrumentFlow {
+            instrument: "temperature".to_string(),
+            from: "127.0.0.1:7001".to_string(),
+            to: "127.0.0.1:7002".to_string(),
+        }];
 
-        let err = validate_manifest(&manifest).expect_err("duplicate output should fail");
+        validate_manifest(&manifest, &instruments, &flows).expect("flow should be valid");
+    }
+
+    #[test]
+    fn rejects_flow_with_unknown_instrument() {
+        let manifest = manifest_with_sims(vec![simulation("sensor", "127.0.0.1:7001")]);
+        let instruments = Vec::new();
+        let flows = vec![InstrumentFlow {
+            instrument: "temperature".to_string(),
+            from: "127.0.0.1:7001".to_string(),
+            to: "127.0.0.1:7002".to_string(),
+        }];
+
+        let err =
+            validate_manifest(&manifest, &instruments, &flows).expect_err("unknown instrument");
 
         assert!(matches!(
             err,
-            CoreError::DuplicateOutput { endpoint, output }
-                if endpoint == "127.0.0.1:7001" && output == "value"
+            CoreError::UnknownFlowInstrument { instrument } if instrument == "temperature"
         ));
     }
 
     #[test]
-    fn allows_local_inputs_without_routes() {
-        let manifest = manifest_with_sim(simulation(
-            vec![InputConfig {
-                name: "remote_value".to_string(),
-                ty: PrimitiveType::Float32,
-            }],
-            Vec::new(),
-        ));
+    fn rejects_flows_from_remote_sources() {
+        let manifest = manifest_with_sims(vec![simulation("sensor", "127.0.0.1:7001")]);
+        let instruments = vec![instrument("value", PrimitiveType::Float32)];
+        let flows = vec![InstrumentFlow {
+            instrument: "value".to_string(),
+            from: "127.0.0.2:7001".to_string(),
+            to: "127.0.0.1:7001".to_string(),
+        }];
 
-        validate_manifest(&manifest).expect("input may be fed by another process");
-    }
-
-    #[test]
-    fn rejects_routes_from_remote_sources() {
-        let mut manifest = manifest_with_sim(simulation(
-            Vec::new(),
-            vec![OutputConfig {
-                name: "value".to_string(),
-                ty: PrimitiveType::Float32,
-            }],
-        ));
-        manifest.routes.push(RouteConfig {
-            from: RouteFrom {
-                endpoint: "127.0.0.2:7001".to_string(),
-                output: "value".to_string(),
-            },
-            to: RouteTo {
-                endpoint: "127.0.0.1:7001".to_string(),
-                input: "value".to_string(),
-            },
-        });
-
-        let err = validate_manifest(&manifest).expect_err("remote source should fail");
+        let err = validate_manifest(&manifest, &instruments, &flows)
+            .expect_err("remote source should fail");
 
         assert!(matches!(
             err,
-            CoreError::RouteSourceNotLocal { endpoint }
+            CoreError::FlowSourceNotLocal { endpoint }
                 if endpoint == "127.0.0.2:7001"
         ));
     }
 
     #[test]
     fn rejects_state_transition_for_unknown_simulation() {
-        let mut manifest = manifest_with_sim(simulation(Vec::new(), Vec::new()));
+        let mut manifest = manifest_with_sims(vec![simulation("sim", "127.0.0.1:7001")]);
         manifest.state_transitions.push(StateTransitionConfig {
             when: StateTransitionCondition {
                 all: vec![SimulationStateCondition {
@@ -357,8 +356,11 @@ mod tests {
             },
             engine: EngineState::RUNNING,
         });
+        let instruments = Vec::new();
+        let flows = Vec::new();
 
-        let err = validate_manifest(&manifest).expect_err("unknown simulation should fail");
+        let err = validate_manifest(&manifest, &instruments, &flows)
+            .expect_err("unknown simulation should fail");
 
         assert!(matches!(
             err,
@@ -369,7 +371,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_state_transition_condition() {
-        let mut manifest = manifest_with_sim(simulation(Vec::new(), Vec::new()));
+        let mut manifest = manifest_with_sims(vec![simulation("sim", "127.0.0.1:7001")]);
         manifest.state_transitions.push(StateTransitionConfig {
             when: StateTransitionCondition {
                 all: Vec::new(),
@@ -377,8 +379,11 @@ mod tests {
             },
             engine: EngineState::RUNNING,
         });
+        let instruments = Vec::new();
+        let flows = Vec::new();
 
-        let err = validate_manifest(&manifest).expect_err("empty condition should fail");
+        let err = validate_manifest(&manifest, &instruments, &flows)
+            .expect_err("empty condition should fail");
 
         assert!(matches!(err, CoreError::EmptyStateTransitionCondition));
     }
