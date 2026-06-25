@@ -2,7 +2,7 @@
   <tr>
     <td>
 
-<img src="icon.ico" width="128"/>
+<img src="https://raw.githubusercontent.com/onurtas1993/images/refs/heads/main/icon.ico" width="100%"/>
     </td>
     <td>
 
